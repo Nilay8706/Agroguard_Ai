@@ -5,7 +5,7 @@ import requests
 app = Flask(__name__)
 
 import os
-API_KEY = os.environ.get("1eaa4950362fd6764a1762c24b29e61e")
+API_KEY = os.environ.get("OPENWEATHER_API_KEY")
 
 # 🧠 In-memory farmer database (multi-user)
 farmers = {}
@@ -105,4 +105,5 @@ def whatsapp():
 
 if __name__ == "__main__":
     app.run(port=5000)
+
 
