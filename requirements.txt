@@ -2,7 +2,3 @@ flask
 twilio
 requests
 gunicorn
-scikit-learn
-joblib
-pandas
-
