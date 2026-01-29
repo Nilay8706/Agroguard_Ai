@@ -1,51 +1,27 @@
 from flask import Flask, request
 from twilio.twiml.messaging_response import MessagingResponse
 import requests
-import os
-import joblib
 
 app = Flask(__name__)
 
-# 🌍 API KEY (Cloud-safe)
+import os
 API_KEY = os.environ.get("OPENWEATHER_API_KEY")
-
-# 🤖 Load ML Model (already trained locally)
-model = joblib.load("disease_model.pkl")
-label_encoder = joblib.load("label_encoder.pkl")
 
 # 🧠 In-memory farmer database (multi-user)
 farmers = {}
 
-# 🦠 ML prediction function
-def ml_disease_risk(temp, humidity, rain):
-    prediction = model.predict([[temp, humidity, rain]])
-    return label_encoder.inverse_transform(prediction)[0]
-
 def get_ai_response(city, crop):
-    url = "https://api.openweathermap.org/data/2.5/weather"
-    params = {
-        "q": city,
-        "appid": API_KEY,
-        "units": "metric"
-    }
+    url = f"https://api.openweathermap.org/data/2.5/weather?q={city}&appid={API_KEY}&units=metric"
+    data = requests.get(url).json()
 
-    response = requests.get(url, params=params, timeout=10)
-    data = response.json()
-
-    if response.status_code != 200 or "main" not in data:
-        return "⚠️ Weather service unavailable. Please try again."
+    if "main" not in data:
+        return "⚠️ Weather service unavailable."
 
     temp = data["main"]["temp"]
     humidity = data["main"]["humidity"]
     weather = data["weather"][0]["description"]
 
-    # 🌧 Rain feature for ML
-    rain = 1 if "rain" in weather.lower() else 0
-
-    # 🦠 ML-based disease risk
-    risk = ml_disease_risk(temp, humidity, rain)
-
-    # 🌱 Soil & irrigation logic (rule-based)
+    # 🌱 Soil + Irrigation logic
     if "rain" in weather.lower():
         soil = "High"
         irrig = "No irrigation needed"
@@ -59,34 +35,74 @@ def get_ai_response(city, crop):
         soil = "Normal"
         irrig = "No irrigation needed"
 
+    # 🦠 Disease risk
+    if humidity >= 80 and temp >= 28:
+        risk = "HIGH"
+    elif humidity >= 65:
+        risk = "MEDIUM"
+    else:
+        risk = "LOW"
+
     return (
         f"🌦️ Weather: {weather}\n"
         f"🌡️ Temp: {temp}°C\n"
         f"💧 Humidity: {humidity}%\n\n"
         f"🌱 Soil Moisture: {soil}\n"
-        f"🦠 Disease Risk (ML): {risk}\n\n"
+        f"🦠 Disease Risk: {risk}\n\n"
         f"🤖 Advice:\n{irrig}\n"
         f"🌾 Crop: {crop}\n"
         f"📍 Location: {city}"
     )
 
-@@app.route("/whatsapp", methods=["POST"])
+@app.route("/whatsapp", methods=["POST"])
 def whatsapp():
-    from_number = request.values.get("From")
+    from_number = request.values.get("From")   # farmer ID
     incoming_msg = request.values.get("Body", "").lower()
-    print(f"Incoming: {incoming_msg} from {from_number}")  # debug log
 
-    from twilio.twiml.messaging_response import MessagingResponse
     resp = MessagingResponse()
     msg = resp.message()
-    msg.body(f"✅ Received: {incoming_msg}")
+
+    # Initialize farmer
+    if from_number not in farmers:
+        farmers[from_number] = {"city": None, "crop": None}
+
+    # 📍 Set location
+    if incoming_msg.startswith("location"):
+        city = incoming_msg.replace("location", "").strip().title()
+        farmers[from_number]["city"] = city
+        msg.body(f"✅ Location set to {city}")
+
+    # 🌾 Set crop
+    elif incoming_msg.startswith("crop"):
+        crop = incoming_msg.replace("crop", "").strip().title()
+        farmers[from_number]["crop"] = crop
+        msg.body(f"✅ Crop set to {crop}")
+
+    # 📊 Status command
+    elif "status" in incoming_msg:
+        city = farmers[from_number]["city"]
+        crop = farmers[from_number]["crop"]
+
+        if not city or not crop:
+            msg.body(
+                "⚠️ Please set details first:\n"
+                "• location Mumbai\n"
+                "• crop Wheat"
+            )
+        else:
+            msg.body(get_ai_response(city, crop))
+
+    else:
+        msg.body(
+            "👋 Welcome to AgroGuard AI 🌱\n\n"
+            "Commands:\n"
+            "• location <city>\n"
+            "• crop <crop name>\n"
+            "• status"
+        )
+
     return str(resp)
 
-
-@app.route("/")
-def home():
-    return "AgroGuard AI with ML is running"
-
 if __name__ == "__main__":
-    app.run()
+    app.run(port=5000)
 
