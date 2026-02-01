@@ -1,21 +1,33 @@
 from flask import Flask, request
 from twilio.twiml.messaging_response import MessagingResponse
 import requests
+import os
 
 app = Flask(__name__)
 
-import os
+# 🌦 OpenWeather API Key (set this in Render Environment)
 API_KEY = os.environ.get("OPENWEATHER_API_KEY")
 
 # 🧠 In-memory farmer database (multi-user)
 farmers = {}
 
+
 def get_ai_response(city, crop):
-    url = f"https://api.openweathermap.org/data/2.5/weather?q={city}&appid={API_KEY}&units=metric"
-    data = requests.get(url).json()
+    try:
+        url = (
+            f"https://api.openweathermap.org/data/2.5/weather"
+            f"?q={city}&appid={API_KEY}&units=metric"
+        )
+        r = requests.get(url, timeout=5)
+        data = r.json()
+    except Exception:
+        return "⚠️ Weather service not responding. Please try again later."
+
+    if not API_KEY:
+        return "⚠️ Weather API key not configured."
 
     if "main" not in data:
-        return "⚠️ Weather service unavailable."
+        return "⚠️ Invalid city name or weather data unavailable."
 
     temp = data["main"]["temp"]
     humidity = data["main"]["humidity"]
@@ -35,7 +47,7 @@ def get_ai_response(city, crop):
         soil = "Normal"
         irrig = "No irrigation needed"
 
-    # 🦠 Disease risk
+    # 🦠 Disease risk logic
     if humidity >= 80 and temp >= 28:
         risk = "HIGH"
     elif humidity >= 65:
@@ -44,8 +56,8 @@ def get_ai_response(city, crop):
         risk = "LOW"
 
     return (
-        f"🌦️ Weather: {weather}\n"
-        f"🌡️ Temp: {temp}°C\n"
+        f"🌦 Weather: {weather}\n"
+        f"🌡 Temp: {temp}°C\n"
         f"💧 Humidity: {humidity}%\n\n"
         f"🌱 Soil Moisture: {soil}\n"
         f"🦠 Disease Risk: {risk}\n\n"
@@ -54,13 +66,16 @@ def get_ai_response(city, crop):
         f"📍 Location: {city}"
     )
 
+
 @app.route("/whatsapp", methods=["POST"])
 def whatsapp():
-    from_number = request.values.get("From")   # farmer ID
-    incoming_msg = request.values.get("Body", "").lower()
+    from_number = request.values.get("From")
+    incoming_msg = request.values.get("Body", "").lower().strip()
+
+    print("📩 From:", from_number)
+    print("💬 Message:", incoming_msg)
 
     resp = MessagingResponse()
-    msg = resp.message()
 
     # Initialize farmer
     if from_number not in farmers:
@@ -70,30 +85,31 @@ def whatsapp():
     if incoming_msg.startswith("location"):
         city = incoming_msg.replace("location", "").strip().title()
         farmers[from_number]["city"] = city
-        msg.body(f"✅ Location set to {city}")
+        resp.message(f"✅ Location set to {city}")
 
     # 🌾 Set crop
     elif incoming_msg.startswith("crop"):
         crop = incoming_msg.replace("crop", "").strip().title()
         farmers[from_number]["crop"] = crop
-        msg.body(f"✅ Crop set to {crop}")
+        resp.message(f"✅ Crop set to {crop}")
 
     # 📊 Status command
-    elif "status" in incoming_msg:
+    elif incoming_msg == "status":
         city = farmers[from_number]["city"]
         crop = farmers[from_number]["crop"]
 
         if not city or not crop:
-            msg.body(
+            resp.message(
                 "⚠️ Please set details first:\n"
                 "• location Mumbai\n"
                 "• crop Wheat"
             )
         else:
-            msg.body(get_ai_response(city, crop))
+            resp.message(get_ai_response(city, crop))
 
+    # ℹ️ Help / default
     else:
-        msg.body(
+        resp.message(
             "👋 Welcome to AgroGuard AI 🌱\n\n"
             "Commands:\n"
             "• location <city>\n"
@@ -102,7 +118,3 @@ def whatsapp():
         )
 
     return str(resp)
-
-if __name__ == "__main__":
-    app.run(port=5000)
-
